@@ -2,6 +2,8 @@ import numpy.random as rdm
 import math, os.path as path, os
 
 tau = math.pi * 2
+sin_multiplier = 10 # sample rate above sin freq to use
+step_scale = 10 # mm/s speed of step function ramp (cannot be instantaneous)
 
 # basically 3 main components to this code in a few variations
 # 1. generator functions for signals that send out a time series list as well as
@@ -18,7 +20,7 @@ def sin_gen(amp, freq, mins):
     # we use this formula because it means that at 0
     # the wave is offset to its lowest point
     # thus the sensor can be homed to zero
-    sampling = 10 * freq
+    sampling = sin_multiplier * freq
     # derive sample rate, use it to get time step
     step = 1 / sampling
     ms_interval = step * 1000
@@ -35,7 +37,7 @@ def sin_gen(amp, freq, mins):
 
 def sweep_gen(amp, f_bgn, f_end, mins):
     high_frq = max(f_bgn, f_end)
-    sampling = 10 * high_frq
+    sampling = sin_multiplier * high_frq
     step = 1 / sampling
     ms_interval = step * 1000
     time = 0
@@ -51,27 +53,6 @@ def sweep_gen(amp, f_bgn, f_end, mins):
         time += step
     return (ms_interval, timestamps, wave_series)
 
-def noise_gen(amp, mins):
-    sampling = 200. # samples per second
-    step = 1 / sampling
-    ms_interval = step * 1000
-    time = 0
-    timestamps = []
-    wave_series = []
-    max_time = mins * 60
-    num_samples = sampling * max_time
-    if num_samples - int(num_samples) > 0:
-        num_samples = int(num_samples) + 1
-    else:
-        num_samples = int(num_samples)
-    # use mean 0, st-dev = 1
-    noise = rdm.standard_normal(size=num_samples)
-    s = sum(noise)
-    for i in range(0, num_samples):
-        timestamps.append(step * i);
-    wave_series = [amp*i/s for i in noise]
-    return (ms_interval, timestamps, wave_series)
-
 def step_gen(amp, mins):
     sampling = 100.
     step = 1 / sampling
@@ -79,15 +60,23 @@ def step_gen(amp, mins):
     time = 0
     timestamps = []
     wave_series = []
-    max_time = mins * 60
+    max_time = mins * 60 + 20 # add lead-in time
+    scale = step_scale / sampling
+    ramp_time = amp / scale # how long to increase speed
     step_start = 10
     step_end = max_time - 10
+    current_pos = 0
     while time < max_time:
+        if time > step_start and time < step_end and current_pos < AMP (mm):
+            current_pos += scale
+            if current_pos > AMP (mm):
+                current_pos = amp
+        elif time > step_end and current_pos > 0:
+            current_pos -= scale
+            if current_pos < 0:
+                current_pos = 0
         timestamps.append(time)
-        if time > step_start and time < step_end:
-            wave_series.append(amp)
-        else:
-            wave_series.append(0.)
+        wave_series.append(current_pos)
         time += step
     return (ms_interval, timestamps, wave_series)    
     
@@ -125,9 +114,9 @@ def sweep_out(amp, freq0, freq1, mins):
     home_folder = get_folder()
     file_prefix = home_folder
     file_prefix += "sweep_"
-    file_prefix += str(int(freq0))
+    file_prefix += str(float(freq0))
     file_prefix += "hz_to_"
-    file_prefix += str(int(freq1))
+    file_prefix += str(float(freq1))
     file_prefix += "hz_"
     file_prefix += str(int(amp))
     file_prefix += "amp_"
@@ -151,42 +140,13 @@ def sweep_out(amp, freq0, freq1, mins):
         meta_file.write(metadata)
     return
 
-def noise_out(amp, mins):
-    (ms_itv, times, wave) = noise_gen(amp, mins)
-    home_folder = get_folder()
-    file_prefix = home_folder
-    file_prefix += "noise_"
-    file_prefix += str(int(amp))
-    file_prefix += "amp_"
-    file_prefix += str(int(mins))
-    file_prefix += "mins"
-    csv_name = file_prefix + ".csv"
-    # used to inform of any additional data worth noting
-    metadata_name = file_prefix+".metadata.txt"
-    metadata = "Make sure input and output intervals"
-    metadata += " are set to " + str(ms_itv) + " ms.\n"
-    metadata += "You may need to adjust the starting position of the table.\n"
-    metadata += "It is advised to set the table starting position to "
-    metadata += str(amp)+" mm.\n"
-    metadata += "(The shake table only allows positive-value positions.)\n"
-    metadata += "The timeseries is the CSV's first column.\n"
-    metadata += "Don't forget to select the proper axis!"
-    print metadata
-    # collect the csv data
-    csv_data = collect_data(times, wave)
-    with open(csv_name, 'w') as csv_file:
-        csv_file.write(csv_data)
-    with open(metadata_name, 'w') as meta_file:
-        meta_file.write(metadata)
-    return
-
 # output the sine wave
 def sin_out(amp, freq, mins):
     (ms_itv, times, wave) = sin_gen(amp, freq, mins)
     home_folder = get_folder()
     file_prefix = home_folder
     file_prefix += "sin_"
-    file_prefix += str(int(freq))
+    file_prefix += str(float(freq))
     file_prefix += "hz_"
     file_prefix += str(int(amp))
     file_prefix += "amp_"
@@ -236,40 +196,49 @@ def step_out(amp, mins):
     with open(metadata_name, 'w') as meta_file:
         meta_file.write(metadata)
     return
+
+def numeric(str):
+    if len(str) <= 0:
+        return False
+    try:
+        float(str)
+        return True
+    except ValueError:
+        return False
     
 def prompt_numeric(msg, data_fmt):
-    num_string = unicode('')
-    while not num_string.isnumeric():
+    num_string = ""
+    while not numeric(num_string):
         if len(num_string) > 0:
             print "Cannot parse input as numeric [", num_string, "]"
         print msg
-        num_string = unicode(raw_input(data_fmt))
+        num_string = raw_input(data_fmt)
         if len(num_string) == 0:
             num_string == " "
     return float(num_string)
     
 
 def usr_prompts():
-    msg = "Generate sine, sine chirp (sweep), pulse (step), or white noise "
+    msg = "Generate sine, sine chirp (sweep), or pulse (step) "
     msg += "pattern. "
     print msg
     char = ''
-    valid = ['s','c','w','p']
+    valid = ['s','c','p']
     while char not in valid:
         if char != '':
             print "\nSorry, that input [", char, "] is invalid."
             print msg
-        var = raw_input("(Input s, c, w, or p respectively to choose.) ")
+        var = raw_input("(Input s, c, or p respectively to choose.) ")
         if len(var) == 0:
             var = ' '
         char = var.lower()[0]; # make lowercase, get first char
     if char == 's':
         print "Creating a sine wave."
         msg = "Please specify an amplitude."
-        data = "AMP: "
+        data = "AMP (mm): "
         amp = prompt_numeric(msg, data)
         msg = "Please specify a frequency."
-        data = "FREQ: "
+        data = "FREQ (Hz): "
         freq = prompt_numeric(msg, data)
         msg = "Please specify a duration. (minutes)"
         data = "DUR: "
@@ -278,31 +247,22 @@ def usr_prompts():
     elif char == 'c':
         print "Creating a swept sine wave."
         msg = "Please specify an amplitude."
-        data = "AMP: "
+        data = "AMP (mm): "
         amp = prompt_numeric(msg, data)
         msg = "Please specify a starting frequency."
-        data = "START FREQ: "
+        data = "START FREQ (Hz): "
         freq0 = prompt_numeric(msg, data)
         msg = "Please specify a termination frequency."
-        data = "END FREQ: "
+        data = "END FREQ (Hz): "
         freq1 = prompt_numeric(msg, data)
         msg = "Please specify a duration. (minutes)"
         data = "DUR: "
         mins = prompt_numeric(msg, data)
         sweep_out(amp, freq0, freq1, mins)
-    elif char == 'w':
-        print "Creating a white noise function."
-        msg = "Please specify an amplitude (total range of noise function)."
-        data = "AMP: "
-        amp = prompt_numeric(msg, data)
-        msg = "Please specify a duration (minutes)"
-        data = "DUR: "
-        mins = prompt_numeric(msg, data)
-        noise_out(amp, mins)
     elif char == 'p':
         print "Creating a step function."
         msg = "Please specify an amplitude (peak value of step)."
-        data = "AMP: "
+        data = "AMP (mm): "
         amp = prompt_numeric(msg, data)
         msg = "The step function has lead-in and out times of 10 seconds.\n"
         msg += "Please specify the duration of the step (minutes)."
