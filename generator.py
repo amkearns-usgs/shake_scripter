@@ -44,13 +44,23 @@ def sweep_gen(amp, f_bgn, f_end, mins):
     timestamps = []
     wave_series = []
     max_time = mins * 60
-    # we use a linear sweep function, this is the parameter
-    k = (f_end - f_bgn) 
+    # number of points in the data
+    samps = math.floor(max_time * sampling)
+    # we use a linear sweep function, using these parameters
+    # f1, f2 are normalized frequencies of start, stop
+    f1 = f_bgn / sampling
+    f2 = f_end / sampling
+    k = (f2 - f1)
+    a = tau * k / samps
+    b = tau * f1
+    idx = 0
     while time < max_time:
         timestamps.append(time)
-        sin_eval = -amp * math.cos(tau*(f_bgn*time + (k/2 * time**2)))
+        # frequency multipliers have been scaled, use index not actual time
+        sin_eval = -amp * math.cos( a/2 * (idx**2) + b * idx  )
         wave_series.append(sin_eval)
         time += step
+        idx += 1
     return (ms_interval, timestamps, wave_series)
 
 def step_gen(amp, mins):
